@@ -6,7 +6,7 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 MODEL_PATH = "models/face_landmarker.task"
-CAM_INDEX = 1
+CAM_INDEX = 0
 
 DRAW_POINTS = True
 DRAW_OUTLINE = True      # draws a simple polyline loop for upper & lower
@@ -57,10 +57,18 @@ def draw_lips_only(frame_bgr, result):
 
     return out
 
+def open_camera():
+    for idx in [0, 1]:
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            print(f"Camera opened at index {idx}")
+            return cap
+        cap.release()
+
+    raise RuntimeError("No camera found at index 0 or 1")
+
 def main():
-    cap = cv2.VideoCapture(CAM_INDEX)
-    if not cap.isOpened():
-        raise RuntimeError("Cannot open webcam")
+    cap = open_camera()
 
     base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
     options = vision.FaceLandmarkerOptions(
