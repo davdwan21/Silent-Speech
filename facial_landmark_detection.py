@@ -36,6 +36,8 @@ def mouth_openness(face, w, h) -> float:
 def draw_lips_only(frame_bgr, result):
     out = frame_bgr.copy()
     if not result.face_landmarks:
+        cv2.putText(out, "No face found", (40, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 0, 255), 5)
         return out
 
     face = result.face_landmarks[0]
@@ -45,16 +47,24 @@ def draw_lips_only(frame_bgr, result):
         lm = face[i]
         return int(lm.x * w), int(lm.y * h)
 
+    drawn = 0
+    
     # Draw points
     if DRAW_POINTS:
         for i in set(UPPER_LIPS + LOWER_LIPS):
             cv2.circle(out, px(i), 1, (0, 255, 0), -1)
+            drawn += 1
+        
 
     # # Mouth openness label (optional)
     # score = mouth_openness(face, w, h)
     # cv2.putText(out, f"mouth_open={score:.3f}", (20, 40),
     #             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
+    if drawn == 0:
+        cv2.putText(out, "No face found", (80, 160),
+                    cv2.FONT_HERSHEY_SIMPLEX, 10.0, (0, 0, 255), 2)
+        
     return out
 
 def main():
