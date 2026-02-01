@@ -21,7 +21,7 @@ DRAW_CHIN_POINTS = True
 # Distance / scale gating (based on mouth width in pixels)
 # Tune these after looking at the on-screen mouth_w value.
 MOUTH_W_MIN_PX = 60
-MOUTH_W_MAX_PX = 110
+MOUTH_W_MAX_PX = 100
 
 # ROI stabilization (EMA)
 EMA_ALPHA = 0.25  # higher = follows quicker, lower = smoother
