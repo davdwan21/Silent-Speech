@@ -6,132 +6,120 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-
 MODEL_PATH = "models/face_landmarker.task"
-OUT_DIR = "lower_npz"
+OUT_DIR = "clips_npz"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 SPEAKER = "me"
 SAVE_ROI = True
 ROI_W, ROI_H = 96, 48
 DRAW_POINTS = True
+CAM_INDEX = 1
 
-NOSE_TIP_INDEX = 1
-LOWER_LIPS = [
-    61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291,
-    308, 324, 318, 402, 317, 14, 87, 178, 88, 95
-]
-UPPER_LIPS = [
-    185, 40, 39, 37, 0, 267, 269, 270, 409, 415, 310,
-    311, 312, 13, 82, 81, 42, 183, 78
-]
-
-LEFT_CORNER = 61
-RIGHT_CORNER = 291
-UPPER_INNER = 13
-LOWER_INNER = 14
-
-MOUTH_SET = sorted(set(UPPER_LIPS + LOWER_LIPS))
 KEYS_10 = list("1234567890")
 
-def get_lower_face_indices(face):
-    """Pick indices below the nose tip based on normalized y."""
-    nose_y = face[NOSE_TIP_INDEX].y
-    return [i for i, lm in enumerate(face) if lm.y > nose_y]
+# -----------------------------
+# Your index sets (as provided)
+# -----------------------------
+NOSE_SET = {
+    1, 2, 4, 5, 6, 19, 20,
+    168, 197, 195, 193, 122, 196, 3,
+    45, 44, 48, 49, 51, 52, 53,
+    275, 274, 278, 279, 281, 282, 283,
+    114, 115, 131, 134, 102,
+    343, 344, 360, 363, 331,
+    94, 97, 99, 100, 101,
+    328, 326, 327, 294, 305
+}
 
-def extract_lower_face_points(face, w, h, idxs, prev_xy_norm=None):
+NOSE_BOTTOM_FOR_CUTOFF = [2, 94, 97, 328, 326]
+
+LEFT_CHEEK = [234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377]
+RIGHT_CHEEK = [454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148]
+CHEEK_SET = set(LEFT_CHEEK + RIGHT_CHEEK)
+
+CHEEK_EXPAND = 0  # set to 1 or 2 if desired
+
+
+def expand_by_index_neighbors(idx_set, k=1):
+    if k <= 0:
+        return set(idx_set)
+    out = set(idx_set)
+    for _ in range(k):
+        more = set()
+        for i in out:
+            for j in (i - 1, i + 1, i - 2, i + 2):
+                if 0 <= j < 468:
+                    more.add(j)
+        out |= more
+    return out
+
+
+CHEEK_SET = expand_by_index_neighbors(CHEEK_SET, CHEEK_EXPAND)
+
+
+# -----------------------------
+# Selection + feature extraction
+# -----------------------------
+CUT_MARGIN = 0.003  # same as your viewer script
+
+def compute_selected_indices(face):
     """
-    Returns:
-      feat: flattened normalized xy points (len = 2 * len(idxs)) (+ optional vel)
-      xy_norm: (N,2) normalized points
+    Returns a fixed ordered list of landmark indices to record for this clip,
+    based on your rule:
+      include if (idx in CHEEK_SET) OR (lm.y > cut_y)
+      but exclude if idx in NOSE_SET
+    """
+    nose_base_y = max(face[i].y for i in NOSE_BOTTOM_FOR_CUTOFF)
+    cut_y = nose_base_y + CUT_MARGIN
+
+    selected = []
+    for idx, lm in enumerate(face):
+        if idx in NOSE_SET:
+            continue
+        if (idx in CHEEK_SET) or (lm.y > cut_y):
+            selected.append(idx)
+
+    # make ordering stable
+    selected.sort()
+    return selected
+
+
+def extract_points_feature(face, w, h, idxs, prev_xy_norm=None, add_vel=True):
+    """
+    - Takes only idxs
+    - Converts to pixel xy
+    - Normalizes (centered / scale by horizontal span)
+    - Returns flattened vector (+ optional velocity)
     """
     xy = np.array([[face[i].x * w, face[i].y * h] for i in idxs], dtype=np.float32)
 
     center = xy.mean(axis=0)
-
-    # Scale by horizontal span (stable-ish for face size)
-    width = float((xy[:, 0].max() - xy[:, 0].min()) + 1e-6)
-
+    width = float((xy[:, 0].max() - xy[:, 0].min()) + 1e-6)  # scale by face width in this subset
     xy_norm = (xy - center) / width
 
-    # Optional: velocity term (mean point motion)
+    if not add_vel:
+        return xy_norm.reshape(-1), xy_norm, center, width
+
     if prev_xy_norm is None:
         vel = 0.0
     else:
         vel = float(np.mean(np.linalg.norm(xy_norm - prev_xy_norm, axis=1)))
 
     feat = np.concatenate([xy_norm.reshape(-1), np.array([vel], dtype=np.float32)], axis=0)
-    return feat, xy_norm
-
-def mouth_openness(face, w, h) -> float:
-    def p(i):
-        lm = face[i]
-        return np.array([lm.x * w, lm.y * h], dtype=np.float32)
-
-    open_dist = np.linalg.norm(p(UPPER_INNER) - p(LOWER_INNER))
-    width = np.linalg.norm(p(LEFT_CORNER) - p(RIGHT_CORNER)) + 1e-6
-    return float(open_dist / width)
-
-
-def polygon_area_xy(pts_xy: np.ndarray) -> float:
-    x = pts_xy[:, 0]
-    y = pts_xy[:, 1]
-    return float(
-        0.5 * np.abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
-    )
-
-
-def extract_mouth_features(face, w, h, prev_xy_norm=None):
-    xy = np.array(
-        [[face[i].x * w, face[i].y * h] for i in MOUTH_SET],
-        dtype=np.float32,
-    )
-
-    left = np.array(
-        [face[LEFT_CORNER].x * w, face[LEFT_CORNER].y * h],
-        dtype=np.float32,
-    )
-    right = np.array(
-        [face[RIGHT_CORNER].x * w, face[RIGHT_CORNER].y * h],
-        dtype=np.float32,
-    )
-    width = float(np.linalg.norm(left - right) + 1e-6)
-
-    center = xy.mean(axis=0)
-    xy_norm = (xy - center) / width
-
-    openness = mouth_openness(face, w, h)
-
-    loop_idx = UPPER_LIPS + LOWER_LIPS[::-1]
-    loop_xy = np.array(
-        [[face[i].x * w, face[i].y * h] for i in loop_idx],
-        dtype=np.float32,
-    )
-    loop_xy_norm = (loop_xy - center) / width
-    area = polygon_area_xy(loop_xy_norm)
-
-    if prev_xy_norm is None:
-        vel = 0.0
-    else:
-        vel = float(np.mean(np.linalg.norm(xy_norm - prev_xy_norm, axis=1)))
-
-    feat = np.concatenate(
-        [
-            xy_norm.reshape(-1),
-            np.array([openness, area, vel], dtype=np.float32),
-        ],
-        axis=0,
-    )
-
     return feat, xy_norm, center, width
 
 
-def crop_mouth_roi_gray(frame_bgr, center_xy, mouth_width_px):
+def crop_roi_gray(frame_bgr, center_xy, width_px):
+    """
+    ROI around the LOWER FACE subset center. If you prefer mouth-only ROI,
+    we can switch this back to your mouth crop logic.
+    """
     h, w = frame_bgr.shape[:2]
     cx, cy = float(center_xy[0]), float(center_xy[1])
 
-    half_w = 1.2 * mouth_width_px
-    half_h = 0.8 * mouth_width_px
+    half_w = 1.2 * width_px
+    half_h = 1.0 * width_px  # slightly taller since it's lower-face-ish
 
     x1 = int(max(0, cx - half_w))
     x2 = int(min(w, cx + half_w))
@@ -147,25 +135,14 @@ def crop_mouth_roi_gray(frame_bgr, center_xy, mouth_width_px):
     return roi
 
 
-def draw_lower_face_only(frame_bgr, result, lower_face_idxs):
+def draw_selected(frame_bgr, face, idxs):
     out = frame_bgr.copy()
-    if not result.face_landmarks:
-        return out
-
-    face = result.face_landmarks[0]
     h, w = out.shape[:2]
-
-    # If we haven't locked indices yet, just show nothing (or everything, your choice)
-    if lower_face_idxs is None:
-        return out
-
-    for i in lower_face_idxs:
+    for i in idxs:
         lm = face[i]
         x, y = int(lm.x * w), int(lm.y * h)
         cv2.circle(out, (x, y), 1, (0, 255, 0), -1)
-
     return out
-
 
 
 def main():
@@ -175,7 +152,7 @@ def main():
     ]
     key_to_word = {KEYS_10[i]: WORDS[i] for i in range(10)}
 
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(CAM_INDEX)
 
     base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
     options = vision.FaceLandmarkerOptions(
@@ -186,16 +163,15 @@ def main():
         output_facial_transformation_matrixes=False,
     )
 
-    cv2.namedWindow("Lips Only", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Recorder", cv2.WINDOW_NORMAL)
 
     recording = False
     current_label = WORDS[0]
     buffer_X, buffer_ts, buffer_roi = [], [], []
+
+    selected_idxs = None  # locked per clip
     prev_xy_norm = None
     clip_id = 0
-    lower_face_idxs = None
-    prev_lower_xy_norm = None
-
 
     t0 = time.monotonic()
 
@@ -207,42 +183,49 @@ def main():
 
             ts_ms = int((time.monotonic() - t0) * 1000)
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(
-                image_format=mp.ImageFormat.SRGB, data=frame_rgb
-            )
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
             result = landmarker.detect_for_video(mp_image, ts_ms)
+
+            out = frame_bgr.copy()
 
             if result.face_landmarks:
                 face = result.face_landmarks[0]
-                if recording and lower_face_idxs is None:
-                    lower_face_idxs = get_lower_face_indices(face)
+                h, w = out.shape[:2]
 
-            out = draw_lower_face_only(frame_bgr, result, lower_face_idxs)
+                # lock indices once per clip (first good face during recording)
+                if recording and selected_idxs is None:
+                    selected_idxs = compute_selected_indices(face)
 
-            if recording and result.face_landmarks and lower_face_idxs is not None:
-                face = result.face_landmarks[0]
-                h, w = frame_bgr.shape[:2]
+                if selected_idxs is not None and DRAW_POINTS:
+                    out = draw_selected(frame_bgr, face, selected_idxs)
 
-                feat, prev_lower_xy_norm = extract_lower_face_points(
-                    face, w, h, lower_face_idxs, prev_xy_norm=prev_lower_xy_norm
-                )
+                # record datapoints
+                if recording and selected_idxs is not None:
+                    feat, prev_xy_norm, center, width_px = extract_points_feature(
+                        face, w, h, selected_idxs, prev_xy_norm=prev_xy_norm, add_vel=True
+                    )
+                    buffer_X.append(feat)
+                    buffer_ts.append(ts_ms)
 
-                buffer_X.append(feat)
-                buffer_ts.append(ts_ms)
+                    if SAVE_ROI:
+                        roi = crop_roi_gray(frame_bgr, center, width_px)
+                        if roi is not None:
+                            buffer_roi.append(roi)
 
+                cv2.putText(out, "FACE", (20, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA)
+            else:
+                cv2.putText(out, "NO FACE", (20, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2, cv2.LINE_AA)
 
             status = "REC" if recording else "IDLE"
-            cv2.putText(
-                out,
-                f"{status} | speaker: {SPEAKER} | label: {current_label}",
-                (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.9,
-                (255, 0, 0),
-                2,
-            )
+            npts = len(selected_idxs) if selected_idxs is not None else 0
+            cv2.putText(out, f"{status} | speaker: {SPEAKER} | label: {current_label} | pts: {npts}",
+                        (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(out, "1-0 to set label | r to toggle record | q to quit",
+                        (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
 
-            cv2.imshow("Lips Only", out)
+            cv2.imshow("Recorder", out)
 
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord("q")):
@@ -254,39 +237,36 @@ def main():
 
             if ch == "r":
                 recording = not recording
+
                 if recording:
                     print("Recording started")
                     buffer_X, buffer_ts, buffer_roi = [], [], []
+                    selected_idxs = None
                     prev_xy_norm = None
-
-                    # NEW: reset + re-lock per clip
-                    lower_face_idxs = None
-                    prev_lower_xy_norm = None
                 else:
-                    if len(buffer_X) > 5:
+                    if len(buffer_X) > 5 and selected_idxs is not None:
                         X = np.stack(buffer_X).astype(np.float32)
                         ts = np.array(buffer_ts, dtype=np.int32)
 
                         save_dict = dict(
-                            X=X, ts=ts, label=current_label, speaker=SPEAKER
+                            X=X,
+                            ts=ts,
+                            label=current_label,
+                            speaker=SPEAKER,
+                            idxs=np.array(selected_idxs, dtype=np.int32),
                         )
 
-                        if SAVE_ROI and buffer_roi:
+                        if SAVE_ROI and len(buffer_roi) > 0:
                             R = np.stack(buffer_roi).astype(np.uint8)
                             T = min(len(X), len(R))
                             save_dict["X"] = X[:T]
                             save_dict["ts"] = ts[:T]
                             save_dict["roi"] = R[:T]
 
-                        fname = (
-                            f"{SPEAKER}_{current_label}_"
-                            f"{int(time.time())}_{clip_id:04d}.npz"
-                        )
-                        np.savez_compressed(
-                            os.path.join(OUT_DIR, fname), **save_dict
-                        )
+                        fname = f"{SPEAKER}_{current_label}_{int(time.time())}_{clip_id:04d}.npz"
+                        np.savez_compressed(os.path.join(OUT_DIR, fname), **save_dict)
+                        print(f"saved {fname}")
                         clip_id += 1
-                        print(f"Saved to {os.path.join(OUT_DIR, fname)}")
 
     cap.release()
     cv2.destroyAllWindows()

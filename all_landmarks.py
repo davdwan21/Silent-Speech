@@ -44,10 +44,27 @@ def main():
             if result.face_landmarks:
                 face = result.face_landmarks[0]
                 h, w = out.shape[:2]
-
-                for lm in face:
+                #for lm in face:
+                    #x, y = int(lm.x * w), int(lm.y * h)
+                    #cv2.circle(out, (x, y), DOT_RADIUS, DOT_COLOR, -1, lineType=cv2.LINE_AA)
+                for idx, lm in enumerate(face):
                     x, y = int(lm.x * w), int(lm.y * h)
+
+                    # draw dot
                     cv2.circle(out, (x, y), DOT_RADIUS, DOT_COLOR, -1, lineType=cv2.LINE_AA)
+
+                    # draw index number (slightly offset)
+                    cv2.putText(
+                        out,
+                        str(idx),
+                        (x + 2, y - 2),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.3,              # font scale (small!)
+                        (255, 255, 255),  # white text
+                        1,
+                        cv2.LINE_AA,
+                    )
+
 
                 cv2.putText(out, "FACE DETECTED", (20, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA)
