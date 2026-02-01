@@ -2,3 +2,4 @@ venv/
 videos_labeled/
 clips_npz/
 lower-face-recordings/
+.venv

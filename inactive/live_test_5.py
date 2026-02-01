@@ -1,3 +1,4 @@
+# live_word_predict_mlp.py
 import time
 import glob
 import cv2
@@ -9,11 +10,12 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 MODEL_PATH = "models/face_landmarker.task"
-CAM_INDEX = 1
+CAM_INDEX = 0
 
 PT_PATH = "word_model.pt"
 NPZ_DIR = "clips_npz"
-WINDOW_NAME = "Live + Word Prediction (Clip Gated)"
+
+WINDOW_NAME = "Live + Word Prediction (Clip Gated) — MLP"
 
 DOT_RADIUS = 1
 DOT_COLOR = (0, 255, 0)
@@ -59,18 +61,22 @@ def get_device():
         return "cuda"
     return "cpu"
 
-# ----------------- MODEL (MATCH TRAINING) -----------------
-class GRUClassifier(nn.Module):
-    def __init__(self, d_in: int, num_classes: int, hidden=128, dropout=0.2):
+# ----------------- MODEL (MLP: mean+std features) -----------------
+class MLP(nn.Module):
+    def __init__(self, in_dim: int, num_classes: int, dropout=0.2):
         super().__init__()
-        self.gru = nn.GRU(input_size=d_in, hidden_size=hidden, batch_first=True)
-        self.drop = nn.Dropout(dropout)
-        self.head = nn.Linear(hidden, num_classes)
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, num_classes),
+        )
 
     def forward(self, x):
-        _, h = self.gru(x)      # h: (1,B,H)
-        h = self.drop(h[0])     # (B,H)
-        return self.head(h)
+        return self.net(x)
 
 # ----------------- LOAD FEATURE SPEC FROM NPZ -----------------
 def load_feature_spec(npz_dir: str):
@@ -88,70 +94,41 @@ def compute_openness(face, idxs):
     return float(max(ys) - min(ys))
 
 def face_to_xvec(face, idxs, d_npz):
-    """
-    Produce the same per-frame vector layout as recording:
-      [x0,y0,x1,y1,...] and possibly + openness if D_npz == 2*len(idxs)+1
-    Returns length D_npz (NOT d_target).
-    """
+    # raw coords for the exact training indices
+    xs = np.array([face[i].x for i in idxs], dtype=np.float32)
+    ys = np.array([face[i].y for i in idxs], dtype=np.float32)
+
+    # center per frame (very likely what your recorder did)
+    xs = xs - xs.mean()
+    ys = ys - ys.mean()
+
     base = np.empty((2 * len(idxs),), dtype=np.float32)
-    j = 0
-    for i in idxs:
-        lm = face[i]
-        base[j] = lm.x
-        base[j + 1] = lm.y
-        j += 2
+    base[0::2] = xs
+    base[1::2] = ys
 
     if d_npz == base.shape[0] + 1:
-        openv = compute_openness(face, idxs)
-        feat = np.concatenate([base, np.array([openv], dtype=np.float32)], axis=0)
-    else:
-        feat = base
+        openv = float(ys.max() - ys.min())
+        return np.concatenate([base, np.array([openv], dtype=np.float32)], axis=0).astype(np.float32)
 
-    return feat.astype(np.float32)
+    return base.astype(np.float32)
 
-# ----------------- TRAINING-MATCH PREPROCESS -----------------
-def fix_dim(X: np.ndarray, d_target: int) -> np.ndarray:
-    # X: (T, D_var) -> (T, d_target)
-    D = X.shape[1]
+
+# ----------------- PREPROCESS (match quick MLP training) -----------------
+def fix_dim_1d(x: np.ndarray, d_target: int) -> np.ndarray:
+    # x: (D,) -> (d_target,)
+    D = x.shape[0]
     if D == d_target:
-        return X
+        return x
     if D > d_target:
-        return X[:, :d_target]
-    pad = np.zeros((X.shape[0], d_target - D), dtype=X.dtype)
-    return np.concatenate([X, pad], axis=1)
+        return x[:d_target]
+    pad = np.zeros((d_target - D,), dtype=x.dtype)
+    return np.concatenate([x, pad], axis=0)
 
-def pad_or_trim_time(X: np.ndarray, T: int) -> np.ndarray:
-    if X.shape[0] >= T:
-        return X[:T]
-    pad = np.zeros((T - X.shape[0], X.shape[1]), dtype=X.dtype)
-    return np.vstack([X, pad])
-
-def zscore_per_clip(X: np.ndarray) -> np.ndarray:
-    mean = X.mean(axis=0, keepdims=True)
-    std = X.std(axis=0, keepdims=True) + 1e-6
-    return (X - mean) / std
-
-def activity_from_X(X: np.ndarray) -> np.ndarray:
-    # if openness scalar exists (odd D), use it
-    if X.shape[1] % 2 == 1:
-        return X[:, -1].astype(np.float32)
-    y = X[:, 1::2]
-    return (y.max(axis=1) - y.min(axis=1)).astype(np.float32)
-
-def trim_clip_like_training(X: np.ndarray, T_target: int, q=0.60, margin=2, min_keep=6) -> np.ndarray:
-    a = activity_from_X(X)
-    thr = float(np.quantile(a, q))
-    active = np.where(a > thr)[0]
-    if len(active) < min_keep:
-        return pad_or_trim_time(X, T_target)
-    lo = max(int(active[0]) - margin, 0)
-    hi = min(int(active[-1]) + margin + 1, X.shape[0])
-    return pad_or_trim_time(X[lo:hi], T_target)
-
-def add_deltas(X: np.ndarray) -> np.ndarray:
-    dX = np.zeros_like(X)
-    dX[1:] = X[1:] - X[:-1]
-    return np.concatenate([X, dX], axis=1)
+def clip_to_feat_mean_std(X: np.ndarray) -> np.ndarray:
+    # X: (t, D)
+    mu = X.mean(axis=0)
+    sd = X.std(axis=0)
+    return np.concatenate([mu, sd], axis=0).astype(np.float32)  # (2D,)
 
 def id_to_label(pred_id, id_to_word):
     if id_to_word is None:
@@ -166,10 +143,10 @@ def id_to_label(pred_id, id_to_word):
     return str(pred_id)
 
 # ----------------- CLIP-GATED SETTINGS -----------------
-OPEN_THRESH = 0.15    # start here; tune using open=... overlay
-START_N = 2
-END_N = 4
-MAX_CLIP = 80
+OPEN_THRESH = 0.18   # was 0.15
+START_N = 3          # was 2
+END_N = 5            # was 4
+MAX_CLIP = 60        # a bit shorter is fine
 HOLD_FRAMES = 20
 
 CONF_THRESH = 0.45
@@ -181,27 +158,18 @@ def main():
     idxs, T_NPZ, D_NPZ = load_feature_spec(NPZ_DIR)
     print(f"NPZ spec: idxs={len(idxs)} | T~{T_NPZ} | D_npz={D_NPZ}")
 
+    # Load quick MLP checkpoint produced by train_quick_words.py
     ckpt = torch.load(PT_PATH, map_location="cpu")
-    NUM_CLASSES = int(ckpt["num_classes"])
-    id_to_word = ckpt.get("id_to_word", None)
+    labels = ckpt["labels"]            # list: ["hello","yes","no","please","thanks"]
+    D_IN = int(ckpt["in_dim"])         # should be 2*D_NPZ typically
+    NUM_CLASSES = len(labels)
 
-    # training-time params
-    T_TARGET = int(ckpt.get("t_target", T_NPZ))
-    D_TARGET_BASE = int(ckpt.get("d_target", D_NPZ))   # base D before deltas
-    USE_DELTAS = bool(ckpt.get("use_deltas", False))
+    expected = 2 * D_NPZ
+    if D_IN != expected:
+        print(f"[WARN] ckpt in_dim={D_IN} but 2*D_npz={expected}. "
+              f"This can still run, but you probably want them to match.")
 
-    # model input dim (after deltas if used)
-    D_IN = int(ckpt["d_in"])
-
-    trim_cfg = ckpt.get("trim", {"q": 0.60, "margin": 2, "min_keep": 6})
-    TRIM_Q = float(trim_cfg.get("q", 0.60))
-    TRIM_MARGIN = int(trim_cfg.get("margin", 2))
-    TRIM_MIN_KEEP = int(trim_cfg.get("min_keep", 6))
-
-    print(f"Checkpoint: D_IN={D_IN} | classes={NUM_CLASSES} | T_TARGET={T_TARGET} | "
-          f"D_TARGET_BASE={D_TARGET_BASE} | use_deltas={USE_DELTAS} | trim={trim_cfg}")
-
-    model = GRUClassifier(d_in=D_IN, num_classes=NUM_CLASSES)
+    model = MLP(in_dim=D_IN, num_classes=NUM_CLASSES)
     model.load_state_dict(ckpt["model_state"])
     model.to(dev).eval()
 
@@ -276,7 +244,7 @@ def main():
                         above_ct = 0
                         below_ct = 0
                 else:
-                    xvec = face_to_xvec(face, idxs, D_NPZ)  # length D_NPZ
+                    xvec = face_to_xvec(face, idxs, D_NPZ)  # (D_NPZ,)
                     clip_buf.append(xvec)
 
                     if below_ct >= END_N or len(clip_buf) >= MAX_CLIP:
@@ -284,26 +252,15 @@ def main():
                         above_ct = 0
                         below_ct = 0
 
+                        # run prediction if we have enough frames
                         if len(clip_buf) >= 6:
-                            Xclip = np.stack(clip_buf).astype(np.float32)      # (t, D_NPZ)
+                            Xclip = np.stack(clip_buf).astype(np.float32)   # (t, D_NPZ)
 
-                            # ---- MATCH TRAINING PIPELINE ----
-                            Xclip = fix_dim(Xclip, D_TARGET_BASE)              # (t, d_target_base)
-                            Xclip = trim_clip_like_training(
-                                Xclip, T_TARGET, q=TRIM_Q, margin=TRIM_MARGIN, min_keep=TRIM_MIN_KEEP
-                            )                                                   # (T_TARGET, d_target_base)
-                            Xclip = zscore_per_clip(Xclip)
+                            # match quick training: mean+std over time
+                            feat = clip_to_feat_mean_std(Xclip)             # (2*D_NPZ,)
+                            feat = fix_dim_1d(feat, D_IN)                   # (D_IN,)
 
-                            if USE_DELTAS:
-                                Xclip = add_deltas(Xclip)                      # (T_TARGET, 2*d_target_base)
-                                Xclip = zscore_per_clip(Xclip)
-
-                            # Ensure final dim matches model input
-                            if Xclip.shape[1] != D_IN:
-                                # last-resort safety (shouldn't happen)
-                                Xclip = fix_dim(Xclip, D_IN)
-
-                            x_t = torch.from_numpy(Xclip).unsqueeze(0).to(dev)  # (1,T,D_IN)
+                            x_t = torch.from_numpy(feat).unsqueeze(0).to(dev)  # (1, D_IN)
                             with torch.no_grad():
                                 logits = model(x_t)
                                 probs = torch.softmax(logits, dim=1)[0].detach().cpu().numpy()
@@ -311,7 +268,7 @@ def main():
                                 conf = float(probs[pred_id])
 
                             last_conf = conf
-                            last_pred = id_to_label(pred_id, id_to_word)
+                            last_pred = id_to_label(pred_id, labels)
                             hold = HOLD_FRAMES
 
                 # overlay
