@@ -10,7 +10,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# ================== CONFIG ==================
+# -----------------------------
+# CONSTANTS
+# -----------------------------
 MODEL_PATH = "models/face_landmarker.task"
 
 # Point this at your *regular* (non-overfit) checkpoint:
@@ -29,8 +31,8 @@ UPPER_INNER = 13
 LOWER_INNER = 14
 
 # Distance gating (optional)
-MOUTH_W_MIN_PX = 70
-MOUTH_W_MAX_PX = 110
+MOUTH_W_MIN_PX = 60
+MOUTH_W_MAX_PX = 150
 
 DRAW_POINTS = True
 
@@ -209,25 +211,6 @@ def topk_from_logits(logits, id_to_label, k=3):
     top = probs.argsort()[::-1][:k]
     return [(id_to_label[int(i)], float(probs[i])) for i in top]
 
-def distance_gauge_from_mouth_px(mw_px, min_px=70, max_px=110):
-    """
-    OK        : 70–110 px
-    TOO FAR   : < 70 px
-    TOO CLOSE : > 110 px
-    """
-    if mw_px < min_px:
-        label = "TOO FAR"
-    elif mw_px > max_px:
-        label = "TOO CLOSE"
-    else:
-        label = "OK"
-
-    # Normalize ONLY over the OK range for a stable bar
-    t = (mw_px - min_px) / (max_px - min_px + 1e-6)
-    t = float(np.clip(t, 0.0, 1.0))
-
-    return t, label
-
 # ================== MAIN ==================
 def main():
     if not os.path.exists(CKPT_PATH):
@@ -276,24 +259,13 @@ def main():
                 h, w = out.shape[:2]
                 mw = mouth_width_px(face, w, h)
                 in_range = (MOUTH_W_MIN_PX <= mw <= MOUTH_W_MAX_PX)
-                t, dist_label = distance_gauge_from_mouth_px(mw, MOUTH_W_MIN_PX, MOUTH_W_MAX_PX)
-
-                if not recording:
-                    cv2.putText(out, f"distance: {dist_label} (mouth_w={mw:.1f}px)",
-                                (20, 195), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                                (0,255,0) if dist_label=="OK" else (0,0,255), 2)
-
-                    # draw a little bar
-                    bar_x, bar_y, bar_w, bar_h = 20, 215, 200, 12
-                    cv2.rectangle(out, (bar_x, bar_y), (bar_x+bar_w, bar_y+bar_h), (255,255,255), 1)
-                    cv2.rectangle(out, (bar_x, bar_y), (bar_x+int(bar_w*t), bar_y+bar_h), (255,255,255), -1)
 
                 if DRAW_POINTS:
                     draw_points(out, face, FIXED_IDXS, color=(0,255,0))
 
-                # cv2.putText(out, f"mouth_w={mw:.1f}px {'OK' if in_range else 'OUT'}",
-                #             (20, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                #             (0,255,0) if in_range else (0,0,255), 2)
+                cv2.putText(out, f"mouth_w={mw:.1f}px {'OK' if in_range else 'OUT'}",
+                            (20, 300), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                            (0,255,0) if in_range else (0,0,255), 2)
 
                 if recording and in_range:
                     feat, prev_xy, center, mouth_w = extract_feature(face, w, h, FIXED_IDXS, prev_xy)

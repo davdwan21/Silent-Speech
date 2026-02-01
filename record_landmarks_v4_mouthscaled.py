@@ -81,6 +81,7 @@ def extract_feature(face, w, h, idxs, prev_xy=None):
     xy_n = (xy - center) / scale
 
     # simple velocity magnitude (reset prev_xy=None when you exit distance band)
+    # the VELOCITY refers to how FAST the mouth is changing over time
     if prev_xy is None:
         vel = 0.0
     else:
