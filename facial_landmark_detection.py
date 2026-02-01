@@ -88,6 +88,13 @@ def extract_mouth_features(face, w, h, prev_xy_norm=None):
                           np.array([openness, area, vel], dtype=np.float32)], axis=0)
    return feat, xy_norm, center, width
 
+# ---------------- UI / drawing ----------------
+def draw_lips_only(frame_bgr, result):
+    out = frame_bgr.copy()
+    if not result.face_landmarks:
+        cv2.putText(out, "No face found", (40, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 0, 255), 5)
+        return out
 
 def crop_mouth_roi_gray(frame_bgr, center_xy, mouth_width_px):
    """
@@ -102,6 +109,25 @@ def crop_mouth_roi_gray(frame_bgr, center_xy, mouth_width_px):
    half_w = 1.2 * mouth_width_px
    half_h = 0.8 * mouth_width_px
 
+    drawn = 0
+    
+    # Draw points
+    if DRAW_POINTS:
+        for i in MOUTH_SET:
+            cv2.circle(out, px(i), 1, (0, 255, 0), -1)
+            drawn += 1
+        
+
+    # # Mouth openness label (optional)
+    # score = mouth_openness(face, w, h)
+    # cv2.putText(out, f"mouth_open={score:.3f}", (20, 40),
+    #             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+    if drawn == 0:
+        cv2.putText(out, "No face found", (80, 160),
+                    cv2.FONT_HERSHEY_SIMPLEX, 10.0, (0, 0, 255), 2)
+        
+    return out
 
    x1 = int(max(0, cx - half_w))
    x2 = int(min(w, cx + half_w))
