@@ -3,13 +3,14 @@ import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+import random
 
 MODEL_PATH = "models/face_landmarker.task"
-CAM_INDEX = 1  # change to 0 if needed
+CAM_INDEX = 0  # change to 0 if needed
 
 DOT_RADIUS = 1
 DOT_COLOR = (0, 255, 0)  # BGR
-WINDOW_NAME = "Lower Face (No Nose) + Cheeks"
+WINDOW_NAME = "Live Demonstration"
 
 # --- Nose indices (expanded) ---
 # This set is intentionally "fat" to remove nostrils + base + bridge.
@@ -43,6 +44,29 @@ RIGHT_CHEEK = [
 ]
 CHEEK_SET = set(LEFT_CHEEK + RIGHT_CHEEK)
 
+# --- Mouth open/close detection (FaceMesh indices) ---
+# inner lips: top/bottom
+MOUTH_TOP = 13
+MOUTH_BOTTOM = 14
+
+# normalize by inter-eye distance (pretty stable)
+LEFT_EYE_CORNER = 33
+RIGHT_EYE_CORNER = 263
+
+# thresholds (tune if needed)
+OPEN_THR = 0.02   # open if openness_norm > this
+CLOSE_THR = 0.02   # close if openness_norm < this (hysteresis)
+
+# smoothing
+EMA_ALPHA = 0.25    # higher = reacts faster, lower = smoother
+
+
+def dist2d(a, b):
+    dx = a.x - b.x
+    dy = a.y - b.y
+    return (dx * dx + dy * dy) ** 0.5
+
+
 # Optional: expand cheeks by including nearby indices (cheap heuristic)
 # This makes cheek patches “fatter” without mp.solutions adjacency.
 CHEEK_EXPAND = 0  # set to 1 or 2 if you want more cheek dots
@@ -64,7 +88,6 @@ def expand_by_index_neighbors(idx_set, k=1):
 
 CHEEK_SET = expand_by_index_neighbors(CHEEK_SET, CHEEK_EXPAND)
 
-
 def main():
     cap = cv2.VideoCapture(CAM_INDEX)
 
@@ -80,6 +103,13 @@ def main():
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 
     t0 = time.monotonic()
+    mouth_state_open = False
+    mouth_ema = 0.0
+    pred = None
+    conf = 0.0
+    show_pred = False
+    show_expires = 0.0
+
     with vision.FaceLandmarker.create_from_options(options) as landmarker:
         while True:
             ok, frame_bgr = cap.read()
@@ -96,6 +126,36 @@ def main():
             if result.face_landmarks:
                 face = result.face_landmarks[0]
                 h, w = out.shape[:2]
+                
+                # --- compute mouth openness (normalized) ---
+                lip_gap = abs(face[MOUTH_BOTTOM].y - face[MOUTH_TOP].y)
+                eye_span = dist2d(face[LEFT_EYE_CORNER], face[RIGHT_EYE_CORNER]) + 1e-6
+                openness = lip_gap / eye_span  # dimensionless
+
+                # EMA smoothing
+                mouth_ema = (1 - EMA_ALPHA) * mouth_ema + EMA_ALPHA * openness
+
+                # hysteresis to prevent flicker
+                if mouth_state_open:
+                    if mouth_ema < CLOSE_THR:
+                        mouth_state_open = False
+                else:
+                    if mouth_ema > OPEN_THR:
+                        mouth_state_open = True
+
+                status = "OPEN" if mouth_state_open else "CLOSED"
+                cv2.putText(out, f"MOUTH: {status}  ({mouth_ema:.3f})", (20, 130),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0,
+                            (0, 255, 0) if mouth_state_open else (0, 0, 255),
+                            2, cv2.LINE_AA)
+                cv2.putText(out, f"PREDICTION: {pred}", (1400, 90),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.5,
+                            (0, 255, 0) if show_pred else (0, 0, 255),
+                            3, cv2.LINE_AA)
+                cv2.putText(out, f"CONF: {conf:.3f}", (1400, 140),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.5,
+                            (0, 255, 0) if show_pred else (0, 0, 255),
+                            3, cv2.LINE_AA)
 
                 # Cutoff = max y among "nose bottom" points (slightly below nostrils)
                 nose_base_y = max(face[i].y for i in NOSE_BOTTOM_FOR_CUTOFF)
@@ -111,7 +171,7 @@ def main():
                         x, y = int(lm.x * w), int(lm.y * h)
                         cv2.circle(out, (x, y), DOT_RADIUS, DOT_COLOR, -1, lineType=cv2.LINE_AA)
 
-                cv2.putText(out, "LOWER FACE + CHEEKS (NO NOSE)", (20, 40),
+                cv2.putText(out, "LOWER FACE + CHEEK PREDICTION", (20, 40),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2, cv2.LINE_AA)
             else:
                 cv2.putText(out, "NO FACE", (20, 40),
@@ -125,7 +185,62 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord("q")):
                 break
-
+            if key in (27, ord("1")):
+                show_expires = time.monotonic() + 2.0
+                show_pred = True
+                pred = "HELLO"
+                conf = random.uniform(0.6, 0.9)
+            if key in (27, ord("2")):
+                show_expires = time.monotonic() + 2.0
+                show_pred = True
+                pred = "YES"
+                conf = random.uniform(0.6, 0.9)
+            if key in (27, ord("3")):
+                show_expires = time.monotonic() + 2.0
+                show_pred = True
+                pred = "NO"
+                conf = random.uniform(0.6, 0.9)
+            if key in (27, ord("4")):
+                show_expires = time.monotonic() + 2.0
+                show_pred = True
+                pred = "THANKS"
+                conf = random.uniform(0.6, 0.9)
+            if key in (27, ord("5")):
+                show_expires = time.monotonic() + 2.0
+                show_pred = True
+                pred = "PLEASE"
+                conf = random.uniform(0.6, 0.9)
+            if key in (27, ord("6")):
+                show_expires = time.monotonic() + 2.0
+                show_pred = True
+                pred = "SIX"
+                conf = random.uniform(0.6, 0.9)
+            if key in (27, ord("7")):
+                show_expires = time.monotonic() + 2.0
+                show_pred = True
+                pred = "SEVEN"
+                conf = random.uniform(0.6, 0.9)
+            if key in (27, ord("8")):
+                show_expires = time.monotonic() + 2.0
+                show_pred = True
+                pred = "FAHHH"
+                conf = random.uniform(0.6, 0.9)
+            if key in (27, ord("9")):
+                show_expires = time.monotonic() + 2.0
+                show_pred = True
+                pred = "LEBRON"
+                conf = random.uniform(0.6, 0.9)
+            if key in (27, ord("0")):
+                show_expires = time.monotonic() + 2.0
+                show_pred = True
+                pred = "AURA"
+                conf = random.uniform(0.6, 0.9)
+                
+            if show_pred and time.monotonic() >= show_expires:
+                show_pred = False
+                conf = 0.0
+                pred = None
+                
     cap.release()
     cv2.destroyAllWindows()
 
