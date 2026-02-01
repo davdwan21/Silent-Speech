@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 
 MODEL_PATH = "models/face_landmarker.task"
-WORD_MODEL_PATH = "word_model.pt"   # produced by train_words.py
+WORD_MODEL_PATH = "word_model_5.pt"   # 5-word model: hello, water, thanks, please, apple
 CAM_INDEX = 0
 
 DRAW_POINTS = True
@@ -34,17 +34,11 @@ DEVICE = "cpu"
 
 # ---------------- Model (same as training) ----------------
 class GRUWordClassifier(nn.Module):
-    def __init__(self, input_dim, hidden=128, num_classes=20):
+    def __init__(self, input_dim, hidden=64, num_classes=5):
         super().__init__()
-        self.gru = nn.GRU(input_dim, hidden, num_layers=2, batch_first=True,
-                          bidirectional=True, dropout=0.1)
-        self.head = nn.Sequential(
-            nn.LayerNorm(hidden * 2),
-            nn.Linear(hidden * 2, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, num_classes),
-        )
+        self.gru = nn.GRU(input_dim, hidden, num_layers=1, batch_first=True,
+                          bidirectional=True)
+        self.head = nn.Linear(hidden * 2, num_classes)
 
     def forward(self, x):
         # x: (B, T, D)
@@ -148,7 +142,7 @@ def load_word_model(path):
     id_to_label = ckpt["id_to_label"]
     num_classes = len(id_to_label)
 
-    model = GRUWordClassifier(input_dim=input_dim, hidden=128, num_classes=num_classes)
+    model = GRUWordClassifier(input_dim=input_dim, hidden=64, num_classes=num_classes)
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, id_to_label, max_t
