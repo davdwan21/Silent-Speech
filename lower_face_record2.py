@@ -6,15 +6,16 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
+
 MODEL_PATH = "models/face_landmarker.task"
-OUT_DIR = "clips_npz"
+OUT_DIR = "clips2_npz"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 SPEAKER = "me"
 SAVE_ROI = True
 ROI_W, ROI_H = 96, 48
 DRAW_POINTS = True
-CAM_INDEX = 1
+CAM_INDEX = 0
 
 # Distance / scale gating (based on mouth width in pixels)
 # Tune these after looking at the on-screen mouth_w value.
@@ -22,7 +23,7 @@ MOUTH_W_MIN_PX = 80
 MOUTH_W_MAX_PX = 110
 
 KEYS_10 = list("1234567890")
-
+ 
 # -----------------------------
 # Your index sets (as provided)
 # -----------------------------
