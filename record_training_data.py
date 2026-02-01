@@ -15,7 +15,8 @@ LANDMARKS_DIR = "clips_npz"
 VIDEOS_DIR = "videos_labeled"
 FPS = 30
 RECORD_SECONDS = 2.0  # Duration per clip
-COUNTDOWN_SECONDS = 3  # Countdown before recording
+COUNTDOWN_SECONDS = 0  # No countdown - start immediately
+TARGET_VIDEOS = 100  # Goal: 100 videos per word
 
 # Your 5 words
 WORDS = ["hello", "water", "thanks", "please", "apple"]
@@ -36,9 +37,45 @@ os.makedirs(VIDEOS_DIR, exist_ok=True)
 
 
 def get_clip_count(word):
-    """Count existing clips for a word."""
-    landmark_count = len([f for f in os.listdir(LANDMARKS_DIR) if f.startswith(word + "_")])
-    return landmark_count
+    """Count existing clips for a word (counts videos)."""
+    video_count = len([f for f in os.listdir(VIDEOS_DIR) if f.startswith(word + "_") and f.endswith(".mp4")])
+    return video_count
+
+
+def get_all_counts():
+    """Get video counts for all words with progress info."""
+    counts = {}
+    for word in WORDS:
+        count = get_clip_count(word)
+        counts[word] = {
+            'count': count,
+            'remaining': max(0, TARGET_VIDEOS - count),
+            'progress': min(100, int(count / TARGET_VIDEOS * 100)),
+            'complete': count >= TARGET_VIDEOS
+        }
+    return counts
+
+
+def print_progress_summary():
+    """Print a nice progress summary to console."""
+    counts = get_all_counts()
+    print("\n" + "="*50)
+    print("  VIDEO COLLECTION PROGRESS")
+    print("="*50)
+    total = 0
+    total_target = len(WORDS) * TARGET_VIDEOS
+    for word in WORDS:
+        info = counts[word]
+        bar_len = 20
+        filled = int(bar_len * info['progress'] / 100)
+        bar = '█' * filled + '░' * (bar_len - filled)
+        status = "✓ DONE" if info['complete'] else f"{info['remaining']} more"
+        print(f"  {word:8} [{bar}] {info['count']:3}/{TARGET_VIDEOS} ({status})")
+        total += info['count']
+    print("-"*50)
+    overall = int(total / total_target * 100)
+    print(f"  TOTAL: {total}/{total_target} ({overall}%)")
+    print("="*50 + "\n")
 
 
 def get_next_clip_id(word):
@@ -115,7 +152,10 @@ def main():
     print("="*50)
     print(f"\nWords to record: {', '.join(WORDS)}")
     print(f"Record duration: {RECORD_SECONDS}s per clip")
-    print(f"Aim for: 50-100 clips per word\n")
+    print(f"Target: {TARGET_VIDEOS} videos per word\n")
+
+    # Show current progress
+    print_progress_summary()
 
     # Initialize camera
     cap = cv2.VideoCapture(0)
@@ -177,20 +217,44 @@ def main():
             # State machine
             if state == "idle":
                 # Show current word and counts
-                counts = {w: get_clip_count(w) for w in WORDS}
+                counts = get_all_counts()
+                current_info = counts[current_word]
 
-                # Header
+                # Header with progress
+                header_color = (0, 255, 0) if current_info['complete'] else (0, 255, 255)
                 cv2.putText(display, f"Current: {current_word.upper()}", (20, 40),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 2)
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.2, header_color, 2)
 
-                # Clip counts
-                y = 80
+                # Progress for current word
+                remaining_text = "COMPLETE!" if current_info['complete'] else f"{current_info['remaining']} more needed"
+                cv2.putText(display, f"{current_info['count']}/{TARGET_VIDEOS} - {remaining_text}", (20, 70),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, header_color, 2)
+
+                # Progress bar for current word
+                bar_x, bar_y, bar_w, bar_h = 20, 85, 300, 20
+                cv2.rectangle(display, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (100, 100, 100), -1)
+                filled_w = int(bar_w * current_info['progress'] / 100)
+                bar_color = (0, 255, 0) if current_info['complete'] else (0, 200, 255)
+                cv2.rectangle(display, (bar_x, bar_y), (bar_x + filled_w, bar_y + bar_h), bar_color, -1)
+                cv2.rectangle(display, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (255, 255, 255), 1)
+
+                # Clip counts for all words
+                y = 130
                 for i, w in enumerate(WORDS):
-                    color = (0, 255, 255) if w == current_word else (200, 200, 200)
-                    indicator = ">" if w == current_word else " "
-                    cv2.putText(display, f"{indicator} {i+1}. {w}: {counts[w]} clips",
-                               (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                    y += 25
+                    info = counts[w]
+                    if w == current_word:
+                        color = (0, 255, 255)
+                        indicator = ">"
+                    elif info['complete']:
+                        color = (0, 255, 0)
+                        indicator = "*"
+                    else:
+                        color = (200, 200, 200)
+                        indicator = " "
+                    status = "DONE" if info['complete'] else f"+{info['remaining']}"
+                    cv2.putText(display, f"{indicator} {i+1}. {w}: {info['count']}/{TARGET_VIDEOS} ({status})",
+                               (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                    y += 22
 
                 # Instructions
                 cv2.putText(display, "Press SPACE to record", (20, HEIGHT - 60),
@@ -291,15 +355,12 @@ def main():
     cv2.destroyAllWindows()
 
     # Final summary
-    print("\n" + "="*50)
-    print("RECORDING SUMMARY")
-    print("="*50)
-    for w in WORDS:
-        count = get_clip_count(w)
-        status = "OK" if count >= 50 else "Need more"
-        print(f"  {w}: {count} clips [{status}]")
-    print("="*50)
+    print_progress_summary()
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] in ['--status', '-s', 'status']:
+        print_progress_summary()
+    else:
+        main()
