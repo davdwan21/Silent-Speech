@@ -10,10 +10,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# import pygame, time
+
 # -----------------------------
 # CONSTANTS
 # -----------------------------
 MODEL_PATH = "models/face_landmarker.task"
+
+# audios
+BOOM_PATH = "audios/vine-boom.mp3"
+FAH_PATH = "audios/fahhhh.mp3"
 
 # Point this at your *regular* (non-overfit) checkpoint:
 # e.g. "word_model_points_roi.pt" or "word_model_points.pt"
@@ -49,6 +55,14 @@ CHEEKS = [
     432, 434, 364, 410, 322, 436, 416
 ]
 FIXED_IDXS = sorted(set(MOUTH_LOWER + MOUTH_UPPER + CHIN_BOTTOM_ARC + CHEEKS))
+
+import subprocess
+
+def play_fah():
+    subprocess.Popen(["afplay", FAH_PATH])
+
+def play_boom():
+    subprocess.Popen(["afplay", BOOM_PATH])
 
 # ================== MODEL (must match train_model.py) ==================
 class TinyROICNN(nn.Module):
@@ -239,6 +253,7 @@ def main():
     bufX, bufR = [], []
     prev_xy = None
     last_top3 = None
+    last_pred = None
 
     t0 = time.monotonic()
     with vision.FaceLandmarker.create_from_options(options) as lm:
@@ -298,6 +313,13 @@ def main():
                 if len(last_top3) > 2:
                     cv2.putText(out, f"3) {last_top3[2][0]}  {last_top3[2][1]:.2f}",
                                 (20, y0+56), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+                
+                if last_pred is not "FAH" and last_top3[0][0] == "fahhh":
+                    play_fah()
+                    last_pred = "FAH"
+                if last_pred is not "LEBRON" and last_top3[0][0] == "lebron":
+                    play_boom()
+                    last_pred = "LEBRON"
 
             cv2.imshow("Live Infer", out)
 
@@ -314,6 +336,7 @@ def main():
                     print("Recording started...")
                 else:
                     print(f"Recording stopped. frames={len(bufX)}. Predicting...")
+                    last_pred = None
                     if len(bufX) < 5:
                         print("Too short.")
                         continue
