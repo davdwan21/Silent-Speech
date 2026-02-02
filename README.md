@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/silent_speech_logo.png" alt="Silent Speech Logo" width="500" height="250">
+  <img src="media/silent_speech_logo.png" alt="Silent Speech Logo" width="50%" height=auto>
   <br>
   <i>“A real-time lip-reading demo that detects spoken words from video alone using MediaPipe facial landmarks, a simple CNN, and a GRU Recurrent Neural Network.”</i>
   <br>
@@ -39,20 +39,32 @@ Our live demonstration pipeline takes in a live camera input and parses each fra
 ## Our Technical Architecture
 
 <p align="center">
-  <img src="media/pipelines.png" alt="Silent Speech Logo" width="500" height="250">
+  <img src="media/Pipelines.png" alt="Technical Architecture Pipelines" width="55%" height=auto>
 </p>
 
-## What Makes us Unique
+## What Makes Us Unique
 
 <p>
-Silent Speech is unique because of how cost efficient its architecture is. Our model only utilizes the most important facial landmarks in the form of a vector as well as a grayscale image of the mouth region in order to run predictions. As such, it can be implemented in replacement of current transcription systems for less.
+Silent Speech is particularly unique from other lip readers because of how cost efficient its architecture is. Our model only utilizes the most important facial landmarks in the form of a vector as well as a grayscale image of the mouth region in order to run predictions. In the future, we envision that Silent Speech can be implemented in replacement of current transcription systems at a much cheaper cost.
 </p>
 
-## Links
+### Links
 
 <a href="https://devpost.com/software/silent-speech-lip-reading?_gl=1*1q5q98s*_gcl_au*MzAwMzAzMjg1LjE3NjUzMTgxNTQ.*_ga*NzI0NTE0Nzc4LjE3NjUzMTgxNTQ.*_ga_0YHJK3Y10M*czE3NzAwNzI5NjgkbzExJGcxJHQxNzcwMDczOTgxJGoyNiRsMCRoMA..">Devpost</a>
+<br>
 <a href="https://www.youtube.com/watch?v=qmZ1zTPY3Lc">YouTube Demo</a>
+
+### Contact Us
+
+If you're interested in the ongoing development of Silent Speech, contact us!
+
+Michelle Dong: mydong@ucsd.edu
+David Wan: dpwan@ucsd.edu
+Caden Cheng: cfc005@ucsd.edu
+Julia Jin: juj021@ucsd.edu
 
 ---
 
 Thanks for checking out Silent Speech! We're likely going to continue working on Silent Speech as a personal project in the future, so stay tuned for updates :)
+
+Last Updated: February 2nd, 2026
