@@ -1,7 +1,7 @@
 <p align="center">
   <img src="media/silent_speech_logo.png" alt="Silent Speech Logo" width="500" height="250">
   <br>
-  <i>“A real-time lip-reading demo that detects spoken words from video alone using MediaPipe facial landmarks and a simple CNN.”</i>
+  <i>“A real-time lip-reading demo that detects spoken words from video alone using MediaPipe facial landmarks, a simple CNN, and a GRU Recurrent Neural Network.”</i>
   <br>
   <br>
   SanD Hacks 2026 Best Overall Hack
