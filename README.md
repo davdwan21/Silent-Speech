@@ -39,7 +39,7 @@ Our live demonstration pipeline takes in a live camera input and parses each fra
 ## Our Technical Architecture
 
 <p align="center">
-  <img src="media/silent_speech_logo.png" alt="Silent Speech Logo" width="500" height="250">
+  <img src="media/pipelines.png" alt="Silent Speech Logo" width="500" height="250">
 </p>
 
 ## What Makes us Unique
